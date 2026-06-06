@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Coffee House – My Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ── User Dashboard ─────────────────────────────────────────────────────── -->
+<!-- Protected page: only logged-in users with role 'user' can stay here -->
+
+<nav class="navbar">
+  <h1>☕ Coffee House Loyalty</h1>
+  <div>
+    <span id="nav-name"></span>
+    <button class="btn-logout" onclick="logout()">Logout</button>
+  </div>
+</nav>
+
+<div class="container">
+
+  <!-- Profile Card -->
+  <div class="card">
+    <h2>My Profile</h2>
+    <div class="profile-info" id="profile-info">
+      <p>Loading...</p>
+    </div>
+  </div>
+
+  <!-- Points Card -->
+  <div class="card">
+    <h2>My Loyalty Points</h2>
+    <div class="points-badge" id="points-display">–</div>
+    <p style="margin-top:0.5rem; color:#888; font-size:0.85rem;">
+      Earn points every time you buy a coffee!
+    </p>
+  </div>
+
+  <!-- Rewards Card -->
+  <div class="card">
+    <h2>Available Rewards</h2>
+    <div id="alert-redeem" class="alert"></div>
+    <div class="rewards-grid" id="rewards-grid">
+      <p>Loading rewards...</p>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // ── Auth Guard ─────────────────────────────────────────────────────────────
+  // If there's no token, redirect to login immediately
+  const token = localStorage.getItem('token');
+  const role  = localStorage.getItem('role');
+
+  if (!token) {
+    window.location.href = 'index.html';
+  }
+  // Admins should be on admin.html, not here
+  if (role === 'admin') {
+    window.location.href = 'admin.html';
+  }
+
+  // ── Show username in navbar ────────────────────────────────────────────────
+  document.getElementById('nav-name').textContent = localStorage.getItem('name') || '';
+
+  // ── Helper: make authenticated API calls ───────────────────────────────────
+  // Automatically adds the JWT to every request header
+  async function authFetch(url, options = {}) {
+    return fetch(url, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,  // JWT sent here
+        ...(options.headers || {})
+      }
+    });
+  }
+
+  // ── Show alert message ─────────────────────────────────────────────────────
+  function showAlert(id, message, type) {
+    const el = document.getElementById(id);
+    el.textContent = message;
+    el.className = `alert alert-${type} show`;
+    // Auto-hide after 4 seconds
+    setTimeout(() => el.classList.remove('show'), 4000);
+  }
+
+  // ── Load Profile ───────────────────────────────────────────────────────────
+  async function loadProfile() {
+    try {
+      const res  = await authFetch('/api/profile');
+
+      // If 401, our token is expired or invalid
+      if (res.status === 401) {
+        logout();
+        return;
+      }
+
+      const data = await res.json();
+
+      // Update profile info section
+      document.getElementById('profile-info').innerHTML = `
+        <p><strong>Name:</strong> ${data.name}</p>
+        <p><strong>Email:</strong> ${data.email}</p>
+        <p><strong>Phone:</strong> ${data.phone || 'Not provided'}</p>
+        <p><strong>Role:</strong> ${data.role}</p>
+      `;
+
+      // Update points badge
+      document.getElementById('points-display').textContent = data.loyaltyPoints;
+
+    } catch (err) {
+      console.error('Failed to load profile:', err);
+    }
+  }
+
+  // ── Load Rewards ───────────────────────────────────────────────────────────
+  async function loadRewards() {
+    try {
+      const res     = await authFetch('/api/rewards');
+      const rewards = await res.json();
+      const grid    = document.getElementById('rewards-grid');
+
+      if (!rewards.length) {
+        grid.innerHTML = '<p>No rewards available yet.</p>';
+        return;
+      }
+
+      // Build a card for each reward with a Redeem button
+      grid.innerHTML = rewards.map(r => `
+        <div class="reward-card">
+          <h3>${r.reward_name}</h3>
+          <div class="points">${r.points_required}</div>
+          <div class="points-label">points needed</div>
+          <button class="btn btn-success btn-sm" onclick="redeem(${r.id}, '${r.reward_name}')">
+            Redeem
+          </button>
+        </div>
+      `).join('');
+
+    } catch (err) {
+      console.error('Failed to load rewards:', err);
+    }
+  }
+
+  // ── Redeem a Reward ────────────────────────────────────────────────────────
+  async function redeem(rewardId, rewardName) {
+    try {
+      const res  = await authFetch('/api/redeem', {
+        method: 'POST',
+        body: JSON.stringify({ rewardId })
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        showAlert('alert-redeem', data.message, 'error');
+        return;
+      }
+
+      showAlert('alert-redeem', data.message, 'success');
+
+      // Reload profile to show updated points
+      loadProfile();
+
+    } catch (err) {
+      showAlert('alert-redeem', 'Network error. Please try again.', 'error');
+    }
+  }
+
+  // ── Logout ─────────────────────────────────────────────────────────────────
+  function logout() {
+    // Clear all stored data and go back to login
+    localStorage.removeItem('token');
+    localStorage.removeItem('role');
+    localStorage.removeItem('name');
+    window.location.href = 'index.html';
+  }
+
+  // ── Initial load ───────────────────────────────────────────────────────────
+  loadProfile();
+  loadRewards();
+</script>
+
+</body>
+</html>

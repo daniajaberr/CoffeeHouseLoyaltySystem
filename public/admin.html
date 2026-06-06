@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Coffee House – Admin Panel</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ── Admin Panel ────────────────────────────────────────────────────────── -->
+<!-- Protected page: only users with role 'admin' can stay here -->
+
+<nav class="navbar">
+  <h1>☕ Coffee House – Admin Panel</h1>
+  <div>
+    <span id="nav-name"></span>
+    <button class="btn-logout" onclick="logout()">Logout</button>
+  </div>
+</nav>
+
+<div class="container">
+
+  <!-- Users Table -->
+  <div class="card">
+    <h2>All Users & Loyalty Points</h2>
+    <div id="alert-users" class="alert"></div>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Name</th>
+          <th>Email</th>
+          <th>Role</th>
+          <th>Points</th>
+          <th>Add Points</th>
+        </tr>
+      </thead>
+      <tbody id="users-tbody">
+        <tr><td colspan="6">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Add New Reward -->
+  <div class="card">
+    <h2>Add New Reward</h2>
+    <div id="alert-add" class="alert"></div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Reward Name</label>
+        <input type="text" id="new-reward-name" placeholder="e.g. Free Latte" />
+      </div>
+      <div class="form-group">
+        <label>Points Required</label>
+        <input type="number" id="new-reward-points" placeholder="e.g. 100" min="1" />
+      </div>
+      <button class="btn btn-success" onclick="addReward()">Add Reward</button>
+    </div>
+  </div>
+
+  <!-- Rewards Management Table -->
+  <div class="card">
+    <h2>Manage Rewards</h2>
+    <div id="alert-rewards" class="alert"></div>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Reward Name</th>
+          <th>Points Required</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="rewards-tbody">
+        <tr><td colspan="4">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</div>
+
+<!-- ── Edit Reward Modal ───────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="edit-modal">
+  <div class="modal">
+    <h3>Edit Reward</h3>
+    <input type="hidden" id="edit-reward-id" />
+    <div class="form-group">
+      <label>Reward Name</label>
+      <input type="text" id="edit-reward-name" />
+    </div>
+    <div class="form-group">
+      <label>Points Required</label>
+      <input type="number" id="edit-reward-points" min="1" />
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-danger" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-success" onclick="saveEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── Auth Guard ─────────────────────────────────────────────────────────────
+  const token = localStorage.getItem('token');
+  const role  = localStorage.getItem('role');
+
+  if (!token) {
+    window.location.href = 'index.html';
+  }
+  // Non-admins should not be here
+  if (role !== 'admin') {
+    window.location.href = 'dashboard.html';
+  }
+
+  document.getElementById('nav-name').textContent = localStorage.getItem('name') || '';
+
+  // ── Helper: authenticated fetch ────────────────────────────────────────────
+  async function authFetch(url, options = {}) {
+    return fetch(url, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        ...(options.headers || {})
+      }
+    });
+  }
+
+  // ── Show alert ─────────────────────────────────────────────────────────────
+  function showAlert(id, message, type) {
+    const el = document.getElementById(id);
+    el.textContent = message;
+    el.className = `alert alert-${type} show`;
+    setTimeout(() => el.classList.remove('show'), 4000);
+  }
+
+  // ── Load All Users ─────────────────────────────────────────────────────────
+  async function loadUsers() {
+    try {
+      const res   = await authFetch('/api/admin/users');
+      if (res.status === 401 || res.status === 403) { logout(); return; }
+      const users = await res.json();
+      const tbody = document.getElementById('users-tbody');
+
+      if (!users.length) {
+        tbody.innerHTML = '<tr><td colspan="6">No users found.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = users.map(u => `
+        <tr>
+          <td>${u.id}</td>
+          <td>${u.name}</td>
+          <td>${u.email}</td>
+          <td>${u.role}</td>
+          <td><strong>${u.loyalty_points}</strong></td>
+          <td>
+            <input type="number" id="pts-${u.id}" min="1" max="10000"
+              style="width:70px; padding:0.3rem; border:1px solid #ddd; border-radius:4px;"
+              placeholder="pts" />
+            <button class="btn btn-warning btn-sm" onclick="addPoints(${u.id})">Add</button>
+          </td>
+        </tr>
+      `).join('');
+    } catch (err) {
+      console.error('Failed to load users:', err);
+    }
+  }
+
+  // ── Add Points to User ─────────────────────────────────────────────────────
+  async function addPoints(userId) {
+    const input  = document.getElementById(`pts-${userId}`);
+    const points = parseInt(input.value);
+
+    if (!points || points < 1) {
+      showAlert('alert-users', 'Please enter a valid number of points.', 'error');
+      return;
+    }
+
+    try {
+      const res  = await authFetch(`/api/admin/users/${userId}/add-points`, {
+        method: 'POST',
+        body: JSON.stringify({ points })
+      });
+      const data = await res.json();
+
+      if (!res.ok) { showAlert('alert-users', data.message, 'error'); return; }
+
+      showAlert('alert-users', data.message, 'success');
+      input.value = '';
+      loadUsers(); // Refresh the table
+    } catch (err) {
+      showAlert('alert-users', 'Network error.', 'error');
+    }
+  }
+
+  // ── Load Rewards ───────────────────────────────────────────────────────────
+  async function loadRewards() {
+    try {
+      const res     = await authFetch('/api/admin/rewards');
+      const rewards = await res.json();
+      const tbody   = document.getElementById('rewards-tbody');
+
+      if (!rewards.length) {
+        tbody.innerHTML = '<tr><td colspan="4">No rewards found.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = rewards.map(r => `
+        <tr>
+          <td>${r.id}</td>
+          <td>${r.reward_name}</td>
+          <td>${r.points_required}</td>
+          <td>
+            <button class="btn btn-warning btn-sm"
+              onclick="openEditModal(${r.id}, '${r.reward_name.replace(/'/g,"\\'")}', ${r.points_required})">
+              Edit
+            </button>
+            <button class="btn btn-danger btn-sm" onclick="deleteReward(${r.id})">
+              Delete
+            </button>
+          </td>
+        </tr>
+      `).join('');
+    } catch (err) {
+      console.error('Failed to load rewards:', err);
+    }
+  }
+
+  // ── Add Reward ─────────────────────────────────────────────────────────────
+  async function addReward() {
+    const name   = document.getElementById('new-reward-name').value.trim();
+    const points = parseInt(document.getElementById('new-reward-points').value);
+
+    if (!name) { showAlert('alert-add', 'Reward name is required.', 'error'); return; }
+    if (!points || points < 1) { showAlert('alert-add', 'Points must be at least 1.', 'error'); return; }
+
+    try {
+      const res  = await authFetch('/api/admin/rewards', {
+        method: 'POST',
+        body: JSON.stringify({ reward_name: name, points_required: points })
+      });
+      const data = await res.json();
+
+      if (!res.ok) { showAlert('alert-add', data.message, 'error'); return; }
+
+      showAlert('alert-add', 'Reward added!', 'success');
+      document.getElementById('new-reward-name').value  = '';
+      document.getElementById('new-reward-points').value = '';
+      loadRewards();
+    } catch (err) {
+      showAlert('alert-add', 'Network error.', 'error');
+    }
+  }
+
+  // ── Edit Modal ─────────────────────────────────────────────────────────────
+  function openEditModal(id, name, points) {
+    document.getElementById('edit-reward-id').value     = id;
+    document.getElementById('edit-reward-name').value   = name;
+    document.getElementById('edit-reward-points').value = points;
+    document.getElementById('edit-modal').classList.add('show');
+  }
+
+  function closeModal() {
+    document.getElementById('edit-modal').classList.remove('show');
+  }
+
+  async function saveEdit() {
+    const id     = document.getElementById('edit-reward-id').value;
+    const name   = document.getElementById('edit-reward-name').value.trim();
+    const points = parseInt(document.getElementById('edit-reward-points').value);
+
+    if (!name || !points || points < 1) {
+      showAlert('alert-rewards', 'Please fill in all fields correctly.', 'error');
+      closeModal();
+      return;
+    }
+
+    try {
+      const res  = await authFetch(`/api/admin/rewards/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ reward_name: name, points_required: points })
+      });
+      const data = await res.json();
+
+      closeModal();
+      if (!res.ok) { showAlert('alert-rewards', data.message, 'error'); return; }
+
+      showAlert('alert-rewards', 'Reward updated!', 'success');
+      loadRewards();
+    } catch (err) {
+      showAlert('alert-rewards', 'Network error.', 'error');
+    }
+  }
+
+  // ── Delete Reward ──────────────────────────────────────────────────────────
+  async function deleteReward(id) {
+    if (!confirm('Delete this reward?')) return;
+
+    try {
+      const res  = await authFetch(`/api/admin/rewards/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+
+      if (!res.ok) { showAlert('alert-rewards', data.message, 'error'); return; }
+
+      showAlert('alert-rewards', 'Reward deleted.', 'success');
+      loadRewards();
+    } catch (err) {
+      showAlert('alert-rewards', 'Network error.', 'error');
+    }
+  }
+
+  // ── Logout ─────────────────────────────────────────────────────────────────
+  function logout() {
+    localStorage.removeItem('token');
+    localStorage.removeItem('role');
+    localStorage.removeItem('name');
+    window.location.href = 'index.html';
+  }
+
+  // ── Initial load ───────────────────────────────────────────────────────────
+  loadUsers();
+  loadRewards();
+</script>
+
+</body>
+</html>
